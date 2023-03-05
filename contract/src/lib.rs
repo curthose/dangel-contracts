@@ -1,169 +1,205 @@
-/*!
-Fungible Token implementation with JSON serialization.
-NOTES:
-  - The maximum balance value is limited by U128 (2**128 - 1).
-  - JSON calls should pass U128 as a base-10 string. E.g. "100".
-  - The contract optimizes the inner trie structure by hashing account IDs. It will prevent some
-    abuse of deep tries. Shouldn't be an issue, once NEAR clients implement full hashing of keys.
-  - The contract tracks the change in storage before and after the call. If the storage increases,
-    the contract requires the caller of the contract to attach enough deposit to the function call
-    to cover the storage cost.
-    This is done to prevent a denial of service attack on the contract by taking all available storage.
-    If the storage decreases, the contract will issue a refund for the cost of the released storage.
-    The unused tokens from the attached deposit are also refunded, so it's safe to
-    attach more deposit than required.
-  - To prevent the deployed contract from being modified or deleted, it should not have any access
-    keys on its account.
-*/
-use near_contract_standards::fungible_token::metadata::{
-    FungibleTokenMetadata, FungibleTokenMetadataProvider, FT_METADATA_SPEC,
-};
-use near_contract_standards::fungible_token::FungibleToken;
+use near_contract_standards::fungible_token::core::ext_ft_core;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::LazyOption;
-use near_sdk::json_types::U128;
-use near_sdk::{env, log, near_bindgen, AccountId, Balance, PanicOnDefault, PromiseOrValue};
+use near_sdk::collections::LookupMap;
+use near_sdk::json_types::{U128};
+use near_sdk::{
+    env, near_bindgen, AccountId, Balance, BorshStorageKey,
+    Gas, PanicOnDefault, log, Promise, PromiseResult, Timestamp,
+};
+mod view;
+
+#[derive(BorshStorageKey, BorshSerialize)]
+pub(crate) enum StorageKey {
+    Accounts,
+}
+pub type TimestampSec = u64;
+pub const GAS_FOR_FT_TRANSFER: Gas = Gas(2_000_000_000_000);
+pub const GAS_FOR_CB_TRANSFER: Gas = Gas(1_000_000_000_000);
+pub const ONE_MONTH: TimestampSec = 20;
+pub const ONE_YOCTO: Balance = 1;
+pub const NO_DEPOSIT: Balance = 0;
+
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct Account {
+    pub total_amount: Balance,
+    pub claimed_amount: Balance,
+    pub start_timestamp: TimestampSec,
+    pub finish_timestamp: TimestampSec,
+    pub releases_count: u64,
+    pub is_revoked: bool,
+    pub is_revocable: bool,
+}
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
-    token: FungibleToken,
-    metadata: LazyOption<FungibleTokenMetadata>,
+    pub owner_id: AccountId,
+    pub accounts: LookupMap<AccountId, Account>,
+    pub token_account_id: AccountId,
+    pub total_claimed: Balance,
 }
-
-const SVG_DANGEL_ICON: &str = "https://kqd2q3gkmnv5fn4dvuehunkttqilhwmvionhxzhrg5xid3izxw7a.arweave.net/VAeobMpja9K3g60IejVTnBCz2ZVDmnvk8Tduge0Zvb4";
-const TOTAL_SUPPLY: Balance = 100_000_000_000_000_000_000_000_000;
 
 #[near_bindgen]
 impl Contract {
-    /// Initializes the contract with the given total supply owned by the given `owner_id` with
-    /// default metadata (for example purposes only).
-    #[init]
-    pub fn new_dangel_meta(owner_id: AccountId) -> Self {
-        Self::new(
-            owner_id,
-            U128(TOTAL_SUPPLY),
-            FungibleTokenMetadata {
-                spec: FT_METADATA_SPEC.to_string(),
-                name: "dAngel".to_string(),
-                symbol: "DANGEL".to_string(),
-                icon: Some(SVG_DANGEL_ICON.to_string()),
-                reference: None,
-                reference_hash: None,
-                decimals: 18,
-            },
-        )
-    }
-
-    /// Initializes the contract with the given total supply owned by the given `owner_id` with
-    /// the given fungible token metadata.
     #[init]
     pub fn new(
         owner_id: AccountId,
-        total_supply: U128,
-        metadata: FungibleTokenMetadata,
+        token_account_id: AccountId,
     ) -> Self {
-        assert!(!env::state_exists(), "Already initialized");
-        metadata.assert_valid();
-        let mut this = Self {
-            token: FungibleToken::new(b"a".to_vec()),
-            metadata: LazyOption::new(b"m".to_vec(), Some(&metadata)),
-        };
-        this.token.internal_register_account(&owner_id);
-        this.token.internal_deposit(&owner_id, total_supply.into());
-        near_contract_standards::fungible_token::events::FtMint {
-            owner_id: &owner_id,
-            amount: &total_supply,
-            memo: Some("Initial tokens supply is minted"),
+        Self {
+            owner_id: owner_id.into(),
+            accounts: LookupMap::new(StorageKey::Accounts),
+            token_account_id: token_account_id.into(),
+            total_claimed: 0,
         }
-        .emit();
-        this
+    }
+    
+
+
+    pub fn claim(&mut self) -> Promise {
+        let account_id = env::predecessor_account_id();
+        assert!(self.accounts.contains_key(&account_id), "Caller not a beneficiary!");
+        let mut account = self.accounts.get(&account_id).unwrap();
+        assert!(!account.is_revoked, "Caller has revoked!");
+        let claimable_amount = self.calculate_vested_amount(&account_id).checked_sub(account.claimed_amount).expect("ERR_INTEGER_OVERFLOW");
+        assert!(claimable_amount > 0, "No claimable amount!");
+        account.claimed_amount += claimable_amount;
+        self.total_claimed += claimable_amount;
+        self.accounts.insert(&account_id, &account);
+        ext_ft_core::ext(self.token_account_id.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(GAS_FOR_FT_TRANSFER)
+            .ft_transfer(
+                account_id.clone(),
+                U128(claimable_amount),
+                None
+            ).then(Self::ext(env::current_account_id())
+            .with_static_gas(GAS_FOR_CB_TRANSFER)
+            .with_attached_deposit(0)
+            .callback_claim_transfer(account_id.clone(), U128(claimable_amount)),)
     }
 
-    fn on_account_closed(&mut self, account_id: AccountId, balance: Balance) {
-        log!("Closed @{} with {}", account_id, balance);
+    pub fn revoke(&mut self, account_id: AccountId) -> Promise {
+        assert_eq!(self.owner_id, env::predecessor_account_id(), "ERR_NOT_OWNER");
+        assert!(self.accounts.contains_key(&account_id), "Caller not a beneficiary!");
+        let mut account = self.accounts.get(&account_id).unwrap();
+        assert!(account.is_revocable, "ERR_GRANT_NOT_REVOCABLE");
+        assert!(!account.is_revoked, "ERR_ALREADY_REVOKED");
+
+        let remaining_amount: u128 = account.total_amount.checked_sub(account.claimed_amount).expect("Integer underflow");
+
+        account.is_revoked = true;
+        self.accounts.insert(&account_id, &account);
+
+        // transfer leftover to owner
+        ext_ft_core::ext(self.token_account_id.clone())
+        .with_attached_deposit(ONE_YOCTO)
+        .with_static_gas(GAS_FOR_FT_TRANSFER)
+        .ft_transfer(
+            self.owner_id.clone(),
+            U128(remaining_amount),
+            None
+        ).then(Self::ext(env::current_account_id())
+        .with_static_gas(GAS_FOR_CB_TRANSFER)
+        .with_attached_deposit(0)
+        .callback_claim_transfer(self.owner_id.clone(), U128(remaining_amount)),)
     }
 
-    fn on_tokens_burned(&mut self, account_id: AccountId, amount: Balance) {
-        log!("Account @{} burned {}", account_id, amount);
+    pub fn get_vested_amount(&self, account_id: AccountId) -> U128{
+        assert!(self.accounts.contains_key(&account_id), "Caller not a beneficiary!");
+        self.calculate_vested_amount(&account_id).into()
+    }
+
+    pub fn add_accounts(
+        &mut self, 
+        accounts: Vec<(AccountId, U128, u64, u64, u64, bool)>,
+    ) -> bool {
+        assert_eq!(self.owner_id, env::predecessor_account_id(), "ERR_NOT_OWNER");
+        for (account_id, amount, start, cliff, releases_count, is_revocable ) in accounts {
+            assert!(cliff > 0 || releases_count > 0, "INVALID PARAMS");
+            if !self.accounts.contains_key(&account_id){
+                let account = Account {
+                    total_amount: amount.into(),
+                    claimed_amount: 0,
+                    start_timestamp: start,
+                    finish_timestamp: start + cliff + releases_count * ONE_MONTH,
+                    releases_count: releases_count,
+                    is_revoked: false,
+                    is_revocable: is_revocable,
+                };
+                self.accounts.insert(&account_id, &account);
+            }
+        } 
+        true
+    }
+    fn calculate_vested_amount(&self, account_id: &AccountId) -> u128 {
+        let current_timestamp = nano_to_sec(env::block_timestamp());
+        let account = self.accounts.get(&account_id).expect("No Vesting Found!");
+        if current_timestamp < account.start_timestamp {
+           0
+        } else if current_timestamp >= account.finish_timestamp || account.is_revoked  {
+           account.total_amount
+        } else {
+            let available_releases = (current_timestamp - account.start_timestamp) as u128 / ONE_MONTH as u128;
+            let tokens_per_release = account.total_amount / account.releases_count as u128;
+            let vested_amount = available_releases as u128 * tokens_per_release;
+            vested_amount
+        }
+    }
+
+    #[private]
+    pub fn callback_claim_transfer(&mut self, account_id: AccountId, amount: U128) -> U128 {
+        assert_eq!(env::promise_results_count(), 1, "ERR_TOO_MANY_RESULTS");
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Successful(_val) => {
+                log!(format!(
+                    "Account claim succeed, account is {}, amount is {}",
+                    account_id,
+                    amount.0
+                ));
+            },
+            PromiseResult::Failed => {
+                let mut account = self
+                .accounts
+                .get(&account_id)
+                .expect("The claim is not found");
+                account.claimed_amount -= amount.0;
+                self.total_claimed -= amount.0;
+                self.accounts.insert(&account_id, &account);
+            }
+        }
+        amount.into()
+    }
+
+    pub fn callback_revoke_transfer(&mut self, account_id: AccountId, amount: U128) -> U128 {
+        assert_eq!(env::promise_results_count(), 1, "ERR_TOO_MANY_RESULTS");
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Successful(_val) => {
+                log!(format!(
+                    "Account revoke succeed, account is {}, remaining amount is {}",
+                    account_id,
+                    amount.0
+                ));
+            },
+            PromiseResult::Failed => {
+                let mut account = self
+                .accounts
+                .get(&account_id)
+                .expect("The account is not found");
+                account.is_revoked = false;
+                self.accounts.insert(&account_id, &account);
+            }
+        }
+        amount.into()
     }
 }
 
-near_contract_standards::impl_fungible_token_core!(Contract, token, on_tokens_burned);
-near_contract_standards::impl_fungible_token_storage!(Contract, token, on_account_closed);
-
-#[near_bindgen]
-impl FungibleTokenMetadataProvider for Contract {
-    fn ft_metadata(&self) -> FungibleTokenMetadata {
-        self.metadata.get().unwrap()
-    }
+pub fn nano_to_sec(nano: Timestamp) -> TimestampSec {
+    nano as TimestampSec / 1_000_000_000 
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use near_sdk::test_utils::{accounts, VMContextBuilder};
-    use near_sdk::MockedBlockchain;
-    use near_sdk::{testing_env, Balance};
 
-    use super::*;
 
-    const TOTAL_SUPPLY: Balance = 1_000_000_000_000_000;
 
-    fn get_context(predecessor_account_id: AccountId) -> VMContextBuilder {
-        let mut builder = VMContextBuilder::new();
-        builder
-            .current_account_id(accounts(0))
-            .signer_account_id(predecessor_account_id.clone())
-            .predecessor_account_id(predecessor_account_id);
-        builder
-    }
-
-    #[test]
-    fn test_new() {
-        let mut context = get_context(accounts(1));
-        testing_env!(context.build());
-        let contract = Contract::new_default_meta(accounts(1).into(), TOTAL_SUPPLY.into());
-        testing_env!(context.is_view(true).build());
-        assert_eq!(contract.ft_total_supply().0, TOTAL_SUPPLY);
-        assert_eq!(contract.ft_balance_of(accounts(1)).0, TOTAL_SUPPLY);
-    }
-
-    #[test]
-    #[should_panic(expected = "The contract is not initialized")]
-    fn test_default() {
-        let context = get_context(accounts(1));
-        testing_env!(context.build());
-        let _contract = Contract::default();
-    }
-
-    #[test]
-    fn test_transfer() {
-        let mut context = get_context(accounts(2));
-        testing_env!(context.build());
-        let mut contract = Contract::new_default_meta(accounts(2).into(), TOTAL_SUPPLY.into());
-        testing_env!(context
-            .storage_usage(env::storage_usage())
-            .attached_deposit(contract.storage_balance_bounds().min.into())
-            .predecessor_account_id(accounts(1))
-            .build());
-        // Paying for account registration, aka storage deposit
-        contract.storage_deposit(None, None);
-
-        testing_env!(context
-            .storage_usage(env::storage_usage())
-            .attached_deposit(1)
-            .predecessor_account_id(accounts(2))
-            .build());
-        let transfer_amount = TOTAL_SUPPLY / 3;
-        contract.ft_transfer(accounts(1), transfer_amount.into(), None);
-
-        testing_env!(context
-            .storage_usage(env::storage_usage())
-            .account_balance(env::account_balance())
-            .is_view(true)
-            .attached_deposit(0)
-            .build());
-        assert_eq!(contract.ft_balance_of(accounts(2)).0, (TOTAL_SUPPLY - transfer_amount));
-        assert_eq!(contract.ft_balance_of(accounts(1)).0, transfer_amount);
-    }
-}
