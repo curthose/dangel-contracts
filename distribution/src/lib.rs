@@ -105,7 +105,7 @@ impl Contract {
         ).then(Self::ext(env::current_account_id())
         .with_static_gas(GAS_FOR_CB_TRANSFER)
         .with_attached_deposit(0)
-        .callback_claim_transfer(self.owner_id.clone(), U128(remaining_amount)),)
+        .callback_revoke_transfer(self.owner_id.clone(), U128(remaining_amount)),)
     }
 
     pub fn get_vested_amount(&self, account_id: AccountId) -> U128{
