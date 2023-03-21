@@ -1,0 +1,11 @@
+/Users/cemil/Documents/GitHub/dangel-ido/integration-tests/target/debug/deps/near_units_core-c382edfba1b8c2e4.rmeta: /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/lib.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/gas.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/near.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/prefixes.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/util.rs
+
+/Users/cemil/Documents/GitHub/dangel-ido/integration-tests/target/debug/deps/libnear_units_core-c382edfba1b8c2e4.rlib: /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/lib.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/gas.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/near.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/prefixes.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/util.rs
+
+/Users/cemil/Documents/GitHub/dangel-ido/integration-tests/target/debug/deps/near_units_core-c382edfba1b8c2e4.d: /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/lib.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/gas.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/near.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/prefixes.rs /Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/util.rs
+
+/Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/lib.rs:
+/Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/gas.rs:
+/Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/near.rs:
+/Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/prefixes.rs:
+/Users/cemil/.cargo/registry/src/github.com-1ecc6299db9ec823/near-units-core-0.2.0/src/util.rs:

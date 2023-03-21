@@ -9,6 +9,7 @@ overflow-checks = true
 [workspace]
 members = [
     "token",
-    "distribution"
+    "distribution",
     "staking",
+    "ido"
 ]
