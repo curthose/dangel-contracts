@@ -19,24 +19,37 @@ pub const GAS_FOR_CB_TRANSFER: Gas = Gas(2_000_000_000_000);
 pub const ONE_YOCTO: Balance = 1;
 pub const NO_DEPOSIT: Balance = 0;
 
+/// Contains information about vesting schedule.
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Account {
+    /// Total amount of tokens to be released at the end of the vesting
     pub total_amount: Balance,
+    /// Tracks claimed amount of tokens for each account.
     pub claimed_amount: Balance,
+    /// Start timestamp after cliff for vesting in seconds.
     pub start_timestamp: TimestampSec,
+    /// Finish timestamp at the end of the vesting.
     pub finish_timestamp: TimestampSec,
+    /// Vesting duration in seconds for each release.
     pub duration: TimestampSec,
+    /// Release number in the vesting.
     pub releases_count: u64,
+    /// true if this vesting schedule is revoked.
     pub is_revoked: bool,
+    ///  Whether the vesting is revocable or not.
     pub is_revocable: bool,
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
+    /// Owner Account ID
     pub owner_id: AccountId,
+    /// Mapping for all beneficiary account IDs to vesting schedules.
     pub accounts: LookupMap<AccountId, Account>,
+    /// dAngel token ID - token.dangelfund.near
     pub token_account_id: AccountId,
+    /// Total claimed amount
     pub total_claimed: Balance,
 }
 
@@ -55,7 +68,7 @@ impl Contract {
         }
     }
     
-
+    /// Transfers vested tokens to beneficiary.
     #[payable]
     pub fn claim(&mut self) -> Promise {
         assert_one_yocto();
@@ -80,6 +93,8 @@ impl Contract {
             .with_attached_deposit(0)
             .callback_claim_transfer(account_id.clone(), U128(claimable_amount)),)
     }
+
+    /// Allows the owner to revoke the vesting. Rest are returned to the owner. 
     #[payable]
     pub fn revoke(&mut self, account_id: AccountId) -> Promise {
         assert_eq!(self.owner_id, env::predecessor_account_id(), "ERR_NOT_OWNER");
@@ -108,10 +123,13 @@ impl Contract {
         .callback_revoke_transfer(self.owner_id.clone(), U128(remaining_amount)),)
     }
 
+    
     pub fn get_vested_amount(&self, account_id: AccountId) -> U128{
         assert!(self.accounts.contains_key(&account_id), "Caller not a beneficiary!");
         self.calculate_vested_amount(&account_id).into()
     }
+
+    /// Creates a new vesting schedule for a beneficiary.
     #[payable]
     pub fn add_accounts(
         &mut self, 
@@ -137,6 +155,8 @@ impl Contract {
         } 
         true
     }
+
+    /// Calculates the amount that has already vested.
     fn calculate_vested_amount(&self, account_id: &AccountId) -> u128 {
         let current_timestamp = nano_to_sec(env::block_timestamp());
         let account = self.accounts.get(&account_id).expect("No Vesting Found!");
@@ -152,6 +172,7 @@ impl Contract {
         }
     }
 
+    /// Callback for claim
     #[private]
     pub fn callback_claim_transfer(&mut self, account_id: AccountId, amount: U128) -> U128 {
         assert_eq!(env::promise_results_count(), 1, "ERR_TOO_MANY_RESULTS");
@@ -164,6 +185,7 @@ impl Contract {
                     amount.0
                 ));
             },
+            /// if transfer failed, restore the account data.
             PromiseResult::Failed => {
                 let mut account = self
                 .accounts
@@ -177,6 +199,7 @@ impl Contract {
         amount.into()
     }
 
+    /// Callback for revoke
     pub fn callback_revoke_transfer(&mut self, account_id: AccountId, amount: U128) -> U128 {
         assert_eq!(env::promise_results_count(), 1, "ERR_TOO_MANY_RESULTS");
         match env::promise_result(0) {
@@ -188,6 +211,7 @@ impl Contract {
                     amount.0
                 ));
             },
+            /// if transfer failed, restore the account data.
             PromiseResult::Failed => {
                 let mut account = self
                 .accounts
