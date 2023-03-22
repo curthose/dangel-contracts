@@ -228,7 +228,3 @@ impl Contract {
 pub fn nano_to_sec(nano: Timestamp) -> TimestampSec {
     nano as TimestampSec / 1_000_000_000 
 }
-
-
-
-

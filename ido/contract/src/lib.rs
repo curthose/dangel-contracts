@@ -26,13 +26,14 @@ pub const ONE_YOCTO: Balance = 1;
 pub const NO_DEPOSIT: Balance = 0;
 pub const DENO: u32 = 1000;
 
+/// Account data to read info from staking contract.
 #[derive(Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AssetView {
     pub token_id: AccountId,
     pub balance: U128
 }
-
+/// Account data to read info from staking contract.
 #[derive(Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AccountDetailedView {
@@ -44,6 +45,7 @@ pub trait ExtStakeInfo {
     fn get_account(account_id: AccountId);
 }
 
+/// Staking Info read callback.
 #[ext_contract(ext_self)]
 pub trait ExtContract {
     fn on_get_account(&mut self, account_id: AccountId, #[callback] account: Option<AccountDetailedView>);
@@ -59,34 +61,44 @@ pub trait FT {
     ) -> PromiseOrValue<U128>;
 }
 
-
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Account {
+    /// Tracks purchased amount for each account.
     pub purchased_amount: Balance,
+    /// Account tier based on stake amount in staking contract.
     pub tier: Tier,
 }
-
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
+    /// Owner Account ID
     pub owner_id: AccountId,
     pub accounts: LookupMap<AccountId, Account>,
     pub total_ido: Balance,
+    /// Staking Contract Account ID - v1.dangelfund.near
     pub staking_contract_id: AccountId,
+    /// Payment Token for Ido sale.
     pub payment_token_id: AccountId,
+    /// dAngel Token ID to check staking contract info matches.
     pub dangel_token_id: AccountId,
+    /// IDO Price
     pub ido_price: Balance,
+    /// Total purchased amount in the sale.
     pub total_purchased: Balance,
+    /// Register start time in seconds.
     pub register_start_timestamp: TimestampSec,
+    /// Register end time in seconds.
     pub register_end_timestamp: TimestampSec,
+    /// Sale start time in seconds.
     pub sale_start_timestamp: TimestampSec,
+    /// Sale end time in seconds.
     pub sale_end_timestamp: TimestampSec,
-    // RATE / 1000
+    // Minimum Tier Cap RATE / 1000
     pub min_tier_cap_rate: u32,
+    /// Tier default configs according to dAngel Fund Tier mechanism: https://docs.dangel.fund/h/tiers.
     pub tier_configs: TierConfigsType,
 }
-
 
 #[near_bindgen]
 impl Contract {
@@ -122,7 +134,9 @@ impl Contract {
         }
     }
     
-
+    /// Registering phase
+    /// Panics if account already registered.
+    /// Panics if account has no storage_deposit.
     #[payable]
     pub fn register(&mut self) -> Promise {
         assert_one_yocto();
@@ -139,6 +153,7 @@ impl Contract {
         .on_get_account(account_id.clone()))
     }
 
+    /// Tier Allocation calculation, see https://docs.dangel.fund/h/tiers
     fn internal_get_tier_allocation(&self, tier: &Tier) -> u128 {
         let configs = self.tier_configs.iter().map(|a| (*a.1)).collect::<Vec<TierConfig>>();
         let acc_tier= self.tier_configs.get(tier).unwrap();
@@ -149,13 +164,16 @@ impl Contract {
         (self.total_ido / total_weight) * acc_tier.pool_weight as u128
     }
 
-    fn internal_purchase(&mut self, account_id: &AccountId, purchase_amount: Balance) {
+    /// Only accounts with Tier(1-7) can purchase, panics if account has no tier (Tier0)
+    fn internal_purchase(&mut self, account_id: &AccountId, paid_amount: Balance) {
         let current_timestamp = nano_to_sec(env::block_timestamp());
         assert!(current_timestamp > self.sale_start_timestamp && current_timestamp < self.sale_end_timestamp , "Sale not open");
         let mut account = self.accounts.get(&account_id).expect("Account is not whitelisted");
+        assert_ne!(account.tier, Tier::Tier0,"Account has no tier.");
         let max_tier_cap = self.internal_get_tier_allocation(&account.tier);
         let min_tier_cap = max_tier_cap * (self.min_tier_cap_rate / DENO) as u128;
-        let amount = (purchase_amount * u128:: pow(10,18)) / self.ido_price;
+        /// Purchased token amount of IDO.
+        let amount = (paid_amount * u128:: pow(10,18)) / self.ido_price;
         assert!(account.purchased_amount + amount > min_tier_cap, "Amount is lower than minimum tier cap");
         assert!(account.purchased_amount + amount < max_tier_cap, "Amount is greater than maximum tier cap");
 
@@ -165,7 +183,7 @@ impl Contract {
         self.accounts.insert(&account_id, &account);
     }
  
-    // View func get storage balance, return 0 if account need deposit to interact
+    /// View func get storage balance, return 0 if account need deposit to interact
     pub fn storage_balance_of(&self, account_id: AccountId) -> U128 {
         let account: Option<Account> = self.accounts.get(&account_id);
         if account.is_some() {
@@ -174,7 +192,7 @@ impl Contract {
             U128(0)
         }
     }
-
+    /// Storage deposit to create account.
     #[payable]
     pub fn storage_deposit(&mut self, account_id: Option<AccountId>) {
         assert_at_least_one_yocto();
@@ -196,6 +214,7 @@ impl Contract {
         }
     }
 
+    /// Triggers purchase.
     pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
@@ -210,20 +229,23 @@ impl Contract {
         PromiseOrValue::Value(U128(0))
     }
 
+    /// If account exist in staking contract, saves tier for account according to stake amount.
+    /// Registering actually happens here.
     #[private]
     pub fn on_get_account(&mut self, account_id: AccountId, #[callback] account_stake: AccountDetailedView) -> U128 {
         assert_eq!(account_stake.supplied[0].token_id,self.dangel_token_id,"Wrong Token");
         let stake_amount = account_stake.supplied[0].balance.into();
-       let account_tier = self.internal_get_tier(stake_amount);
-       assert_ne!(account_tier,Tier::Tier0,"Insufficient Stake Amount");
-       let mut account = self.accounts.get(&account_id).unwrap();
-       account.tier = account_tier;
-       self.accounts.insert(&account_id,&account);
+        let account_tier = self.internal_get_tier(stake_amount);
+        /// Tier::Tier0 means account stake amount is below minimum stake amount: no tier.
+        assert_ne!(account_tier,Tier::Tier0,"Insufficient Stake Amount");
+        let mut account = self.accounts.get(&account_id).unwrap();
+        account.tier = account_tier;
+        self.accounts.insert(&account_id,&account);
 
-       let mut tier_info  = self.tier_configs.get(&account_tier).map(|&cfg| cfg).unwrap();
-       tier_info.number_of_participants += 1;
-       self.tier_configs.insert(account_tier, tier_info);
-       U128(stake_amount)
+        let mut tier_info  = self.tier_configs.get(&account_tier).map(|&cfg| cfg).unwrap();
+        tier_info.number_of_participants += 1;
+        self.tier_configs.insert(account_tier, tier_info);
+        U128(stake_amount)
     }
 
 }

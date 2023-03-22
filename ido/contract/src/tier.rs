@@ -1,7 +1,7 @@
 use crate::*;
 
 pub type TierConfigsType = HashMap<Tier, TierConfig>;
-
+/// see https://docs.dangel.fund/h/tiers.
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, PartialOrd, Copy)]
 #[serde(crate = "near_sdk::serde")]
 pub enum Tier {
@@ -17,8 +17,11 @@ pub enum Tier {
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(crate = "near_sdk::serde")]
 pub struct TierConfig {
+    /// Minimum stake amount to get tier.
     pub min_point: Balance,
+    /// Pool Weight for each tier.
     pub pool_weight: u32,
+    /// Tracks number of participants for each tier.
     pub number_of_participants: u32,
 }
 
